@@ -46,6 +46,8 @@ public final class PathMappers {
           "DexBuilder",
           "Javac",
           "JavacTurbine",
+          "JavaToolchainCompileBootClasspath",
+          "JavaToolchainCompileClasses",
           "Jetify",
           "JetifySrcs",
           "LinkAndroidResources",
