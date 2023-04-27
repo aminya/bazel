@@ -135,6 +135,15 @@ public interface ActionApi extends StarlarkValue {
   Dict<String, String> getEnv(StarlarkSemantics semantics) throws EvalException;
 
   @StarlarkMethod(
+      name = "env_inherit",
+      structField = true,
+      doc =
+          "The 'inherited' environment variables for this action. This includes only environment"
+              + " settings which are explicitly set by the action definition, and thus omits"
+              + " settings which are only pre-set in the execution environment.")
+  Sequence<String> getInheritedEnv() throws EvalException;
+
+  @StarlarkMethod(
       name = "execution_info",
       structField = true,
       doc =

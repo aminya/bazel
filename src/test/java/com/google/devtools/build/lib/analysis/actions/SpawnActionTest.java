@@ -257,8 +257,7 @@ public final class SpawnActionTest extends BuildViewTestCase {
     Spawn spawn =
         action.getSpawn(
             (artifact, outputs) -> outputs.add(artifact),
-            ImmutableMap.of(),
-            /*envResolved=*/ false,
+            key -> null,
             ImmutableMap.of(),
             /*reportOutputs=*/ true);
     String paramFileName = output.getExecPathString() + "-0.params";
