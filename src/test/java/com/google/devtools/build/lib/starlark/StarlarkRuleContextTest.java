@@ -2483,8 +2483,9 @@ public final class StarlarkRuleContextTest extends BuildViewTestCase {
 
     Object envInheritUnchecked = ev.eval("action.env_inherit");
     assertThat(envInheritUnchecked).isInstanceOf(StarlarkList.class);
-    assertThat(((StarlarkList) envInheritUnchecked).isImmutable()).isTrue();
     List<String> envInherit = Sequence.cast(envInheritUnchecked, String.class, "test").getImmutableList();
+    // Depending on the OS of the host, the environment may contain other variables inherited from
+    // the client environment (possibly in modified form), such as PATH or LD_LIBRARY_PATH.
     assertThat(envInherit).contains("MY_VAR");
   }
 

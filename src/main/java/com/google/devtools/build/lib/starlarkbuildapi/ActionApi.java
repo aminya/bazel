@@ -138,9 +138,10 @@ public interface ActionApi extends StarlarkValue {
       name = "env_inherit",
       structField = true,
       doc =
-          "The 'inherited' environment variables for this action. This includes only environment"
-              + " settings which are explicitly set by the action definition, and thus omits"
-              + " settings which are only pre-set in the execution environment.")
+          "The list of environment variable names whose values are inherited from the shell"
+              + " environment for this action. This includes only environment settings which are"
+              + " explicitly set by the action definition, and thus omits settings which are only"
+              + " pre-set in the execution environment.")
   Sequence<String> getInheritedEnv() throws EvalException;
 
   @StarlarkMethod(
