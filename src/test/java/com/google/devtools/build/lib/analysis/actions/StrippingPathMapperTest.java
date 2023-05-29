@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.analysis.actions;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.truth.Truth.assertThat;
+import static java.lang.String.format;
 
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -102,6 +103,8 @@ public class StrippingPathMapperTest extends BuildViewTestCase {
     scratch.file("defs/BUILD");
     scratch.file(
         "defs/defs.bzl",
+        "def _map_each(file):",
+        "    return '{}:{}:{}:{}'.format(file.short_path, file.path, file.root.path, file.dirname)",
         "def _my_rule_impl(ctx):",
         "    args = ctx.actions.args()",
         "    args.add(ctx.outputs.out)",
@@ -109,6 +112,7 @@ public class StrippingPathMapperTest extends BuildViewTestCase {
         "        depset(ctx.files.srcs),",
         "        before_each = '-source',",
         "        format_each = '<%s>',",
+        "        map_each = _map_each,",
         "    )",
         "    ctx.actions.run(",
         "        outputs = [ctx.outputs.out],",
@@ -116,7 +120,7 @@ public class StrippingPathMapperTest extends BuildViewTestCase {
         "        executable = ctx.executable._tool,",
         "        arguments = [args],",
         "        mnemonic = 'MyRuleAction',",
-        String.format("        execution_requirements = %s,", Starlark.repr(executionRequirements)),
+        format("        execution_requirements = %s,", Starlark.repr(executionRequirements)),
         "    )",
         "    return [DefaultInfo(files = depset([ctx.outputs.out]))]",
         "my_rule = rule(",
@@ -171,12 +175,12 @@ public class StrippingPathMapperTest extends BuildViewTestCase {
     String outDir = analysisMock.getProductName() + "-out";
     assertThat(spawn.getArguments().stream().collect(toImmutableList()))
         .containsExactly(
-            outDir + "/bin/tool/tool",
-            outDir + "/bin/pkg/out.bin",
+            format("%s/bin/tool/tool", outDir),
+            format("%s/bin/pkg/out.bin", outDir),
             "-source",
-            "<" + outDir + "/bin/pkg/gen_src.txt>",
+            format("<pkg/gen_src.txt:%1$s/bin/pkg/gen_src.txt:%1$s/bin:%1$s/bin/pkg>", outDir),
             "-source",
-            "<pkg/source.txt>")
+            "<pkg/source.txt:pkg/source.txt::pkg>")
         .inOrder();
   }
 
@@ -197,12 +201,12 @@ public class StrippingPathMapperTest extends BuildViewTestCase {
     String outDir = analysisMock.getProductName() + "-out";
     assertThat(spawn.getArguments().stream().collect(toImmutableList()))
         .containsExactly(
-            outDir + "/bin/tool/tool",
-            outDir + "/bin/pkg/out.bin",
+            format("%s/bin/tool/tool", outDir),
+            format("%s/bin/pkg/out.bin", outDir),
             "-source",
-            "<" + outDir + "/bin/pkg/gen_src.txt>",
+            format("<pkg/gen_src.txt:%1$s/bin/pkg/gen_src.txt:%1$s/bin:%1$s/bin/pkg>", outDir),
             "-source",
-            "<pkg/source.txt>")
+            "<pkg/source.txt:pkg/source.txt::pkg>")
         .inOrder();
   }
 }
