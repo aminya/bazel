@@ -172,7 +172,8 @@ public class ModOptions extends OptionsBase {
     PATH(true),
     EXPLAIN(true),
     SHOW_REPO(false),
-    SHOW_EXTENSION(false);
+    SHOW_EXTENSION(false),
+    FIX(false);
 
     /** Whether this subcommand produces a graph output. */
     private final boolean isGraph;

@@ -188,6 +188,7 @@ java_library(
         ":exception",
         ":module_extension",
         ":module_extension_metadata",
+        ":module_file_fixup_event",
         ":registry",
         ":resolution",
         "//src/main/java/com/google/devtools/build/docgen/annot",
@@ -308,5 +309,23 @@ java_library(
         "//third_party:gson",
         "//third_party:guava",
         "//third_party:jsr305",
+    ],
+)
+
+java_library(
+    name = "module_file_fixup_event",
+    srcs = [
+        "ModuleFileFixupEvent.java",
+    ],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod/modcommand:__pkg__",
+        "//src/main/java/com/google/devtools/build/lib/bazel/commands:__pkg__",
+    ],
+    deps = [
+        ":module_extension",
+        "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/net/starlark/java/syntax",
+        "//third_party:auto_value",
+        "//third_party:guava",
     ],
 )

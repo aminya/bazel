@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.bazel.commands;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.devtools.build.lib.bazel.bzlmod.modcommand.ModOptions.Charset.UTF8;
@@ -27,12 +28,15 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
+import com.google.common.eventbus.Subscribe;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelDepGraphValue;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelModuleInspectorValue;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelModuleInspectorValue.AugmentedModule;
 import com.google.devtools.build.lib.bazel.bzlmod.BzlmodRepoRuleValue;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleExtensionId;
+import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileFixupEvent;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleKey;
+import com.google.devtools.build.lib.bazel.bzlmod.SingleExtensionEvalValue;
 import com.google.devtools.build.lib.bazel.bzlmod.modcommand.ExtensionArg;
 import com.google.devtools.build.lib.bazel.bzlmod.modcommand.ExtensionArg.ExtensionArgConverter;
 import com.google.devtools.build.lib.bazel.bzlmod.modcommand.InvalidArgumentException;
@@ -55,11 +59,17 @@ import com.google.devtools.build.lib.runtime.LoadingPhaseThreadsOption;
 import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.ModCommand.Code;
+import com.google.devtools.build.lib.shell.CommandException;
+import com.google.devtools.build.lib.shell.CommandResult;
+import com.google.devtools.build.lib.shell.ExecFailedException;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.util.AbruptExitException;
+import com.google.devtools.build.lib.util.CommandBuilder;
+import com.google.devtools.build.lib.util.CommandFailureUtils;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.InterruptedFailureDetails;
 import com.google.devtools.build.lib.util.MaybeCompleteSet;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -69,10 +79,15 @@ import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.OptionsParsingResult;
 import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
+import javax.annotation.Nullable;
 
 /** Queries the Bzlmod external dependency graph. */
 @Command(
@@ -91,6 +106,8 @@ public final class ModCommand implements BlazeCommand {
 
   public static final String NAME = "mod";
 
+  private static final ArrayList<ModuleFileFixupEvent> fixupEvents = new ArrayList<>();
+
   @Override
   public void editOptions(OptionsParser optionsParser) {
     try {
@@ -106,8 +123,28 @@ public final class ModCommand implements BlazeCommand {
 
   @Override
   public BlazeCommandResult exec(CommandEnvironment env, OptionsParsingResult options) {
+    env.getEventBus().register(this);
+
+    if (options.getResidue().isEmpty()) {
+      String errorMessage =
+          String.format(
+              "No subcommand specified, choose one of : %s.", ModSubcommand.printValues());
+      return reportAndCreateFailureResult(env, errorMessage, Code.MOD_COMMAND_UNKNOWN);
+    }
+
+    // The first element in the residue must be the subcommand, and then comes a list of arguments.
+    String subcommandStr = options.getResidue().get(0);
+    ModSubcommand subcommand;
+    try {
+      subcommand = new ModSubcommandConverter().convert(subcommandStr);
+    } catch (OptionsParsingException e) {
+      String errorMessage =
+          String.format("Invalid subcommand, choose one from : %s.", ModSubcommand.printValues());
+      return reportAndCreateFailureResult(env, errorMessage, Code.MOD_COMMAND_UNKNOWN);
+    }
+
     BazelDepGraphValue depGraphValue;
-    BazelModuleInspectorValue moduleInspector;
+    @Nullable BazelModuleInspectorValue moduleInspector;
 
     SkyframeExecutor skyframeExecutor = env.getSkyframeExecutor();
     LoadingPhaseThreadsOption threadsOption = options.getOptions(LoadingPhaseThreadsOption.class);
@@ -118,13 +155,18 @@ public final class ModCommand implements BlazeCommand {
             .setEventHandler(env.getReporter())
             .build();
 
+    ImmutableSet<SkyKey> graphSkyKeys;
+    if (subcommand == ModSubcommand.FIX) {
+      graphSkyKeys = ImmutableSet.of(BazelDepGraphValue.KEY);
+    } else {
+      graphSkyKeys = ImmutableSet.of(BazelDepGraphValue.KEY, BazelModuleInspectorValue.KEY);
+    }
+
     try {
       env.syncPackageLoading(options);
 
       EvaluationResult<SkyValue> evaluationResult =
-          skyframeExecutor.prepareAndGet(
-              ImmutableSet.of(BazelDepGraphValue.KEY, BazelModuleInspectorValue.KEY),
-              evaluationContext);
+          skyframeExecutor.prepareAndGet(graphSkyKeys, evaluationContext);
 
       if (evaluationResult.hasError()) {
         Exception e = evaluationResult.getError().getException();
@@ -153,24 +195,87 @@ public final class ModCommand implements BlazeCommand {
     ModOptions modOptions = options.getOptions(ModOptions.class);
     Preconditions.checkArgument(modOptions != null);
 
-    if (options.getResidue().isEmpty()) {
-      String errorMessage =
-          String.format(
-              "No subcommand specified, choose one of : %s.", ModSubcommand.printValues());
-      return reportAndCreateFailureResult(env, errorMessage, Code.MOD_COMMAND_UNKNOWN);
-    }
-
-    // The first element in the residue must be the subcommand, and then comes a list of arguments.
-    String subcommandStr = options.getResidue().get(0);
-    ModSubcommand subcommand;
-    try {
-      subcommand = new ModSubcommandConverter().convert(subcommandStr);
-    } catch (OptionsParsingException e) {
-      String errorMessage =
-          String.format("Invalid subcommand, choose one from : %s.", ModSubcommand.printValues());
-      return reportAndCreateFailureResult(env, errorMessage, Code.MOD_COMMAND_UNKNOWN);
-    }
     List<String> args = options.getResidue().subList(1, options.getResidue().size());
+
+    // Handle commands that should not evaluate all extensions.
+    try {
+      if (subcommand == ModSubcommand.FIX) {
+        // FIX doesn't take extra arguments.
+        if (!args.isEmpty()) {
+          return reportAndCreateFailureResult(
+              env, "the 'fix' command doesn't take extra arguments", Code.TOO_MANY_ARGUMENTS);
+        }
+
+        ImmutableSet<SkyKey> extensionsUsedByRootModule =
+            depGraphValue
+                .getExtensionUsagesTable()
+                .columnMap()
+                .get(ModuleKey.ROOT)
+                .keySet()
+                .stream()
+                .map(SingleExtensionEvalValue::key)
+                .collect(toImmutableSet());
+        EvaluationResult<SkyValue> result =
+            env.getSkyframeExecutor().prepareAndGet(extensionsUsedByRootModule, evaluationContext);
+        if (result.hasError()) {
+          Exception e = result.getError().getException();
+          String message =
+              "Unexpected error while evaluating all extensions used by the root module.";
+          if (e != null) {
+            message = e.getMessage();
+          }
+          return reportAndCreateFailureResult(env, message, Code.INVALID_ARGUMENTS);
+        }
+
+        PrintWriter printer =
+            new PrintWriter(
+                new OutputStreamWriter(
+                    env.getReporter().getOutErr().getOutputStream(), StandardCharsets.UTF_8));
+        CommandBuilder buildozerCommand =
+            new CommandBuilder()
+                .setWorkingDir(env.getWorkspace())
+                .addArg("buildozer")
+                .addArgs(
+                    fixupEvents.stream()
+                        .map(ModuleFileFixupEvent::getBuildozerCommands)
+                        .flatMap(Collection::stream)
+                        .collect(toImmutableList()))
+                .addArg("//MODULE.bazel:all");
+
+        try {
+          CommandResult commandResult = buildozerCommand.build().execute();
+          if (!commandResult.getTerminationStatus().success()) {
+            return reportAndCreateFailureResult(
+                env,
+                "buildozer failed:" + new String(commandResult.getStderr(), UTF_8),
+                Code.BUILDOZER_FAILED);
+          }
+        } catch (ExecFailedException e) {
+          return reportAndCreateFailureResult(
+              env,
+              "Failed to run buildozer. Please download a release from "
+                  + "https://github.com/bazelbuild/buildtools/releases and ensure that is in PATH.",
+              Code.BUILDOZER_FAILED);
+        } catch (InterruptedException | CommandException e) {
+          return reportAndCreateFailureResult(
+              env,
+              "Unexpected error while running buildozer: " + e.getMessage(),
+              Code.BUILDOZER_FAILED);
+        }
+
+        fixupEvents.stream()
+            .map(ModuleFileFixupEvent::getSuccessMessage)
+            .forEachOrdered(printer::println);
+        printer.flush();
+        fixupEvents.clear();
+        return BlazeCommandResult.success();
+      }
+    } catch (InterruptedException e) {
+      String errorMessage = "mod command interrupted: " + e.getMessage();
+      env.getReporter().handle(Event.error(errorMessage));
+      return BlazeCommandResult.detailedExitCode(
+          InterruptedFailureDetails.detailedExitCode(errorMessage));
+    }
 
     // Extract and check the --base_module argument first to use it when parsing the other args.
     // Can only be a TargetModule or a repoName relative to the ROOT.
@@ -434,6 +539,8 @@ public final class ModCommand implements BlazeCommand {
       case SHOW_EXTENSION:
         modExecutor.showExtension(argsAsExtensions, usageKeys);
         break;
+      default:
+        throw new IllegalStateException("Unexpected subcommand: " + subcommand);
     }
 
     return BlazeCommandResult.success();
@@ -493,5 +600,10 @@ public final class ModCommand implements BlazeCommand {
                 .setModCommand(FailureDetails.ModCommand.newBuilder().setCode(detailedCode).build())
                 .setMessage(message)
                 .build()));
+  }
+
+  @Subscribe
+  public void fixup(ModuleFileFixupEvent event) {
+    fixupEvents.add(event);
   }
 }
