@@ -265,14 +265,10 @@ public class RepositoryOptions extends OptionsBase {
   @Option(
       name = "experimental_repository_cache_urls_as_default_canonical_id",
       defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help =
-          "If true, use a string derived from the URLs of repository downloads as the canonical_id "
-              + "if not specified. This causes a change in the URLs to result in a redownload even "
-              + "if the cache contains a download with the same hash. This can be used to verify "
-              + "that URL changes don't result in broken repositories being masked by the cache.")
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      metadataTags = OptionMetadataTag.DEPRECATED,
+      effectTags = {OptionEffectTag.NO_OP},
+      help = "No-op.")
   public boolean urlsAsDefaultCanonicalId;
 
   @Option(
